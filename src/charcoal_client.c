@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <aio.h>
 #include "../include/charcoal_msg.h"
 #include "../include/charcoal_client.h"
 #include "../include/charcoal_logger.h"
@@ -232,15 +233,26 @@ void client_parse_user_input(server_t *server){
     int not_parsed = 1;
     
     while(not_parsed){
-        char* input = helper_readline("charcoal> ");
-    
-        if (strcmp(input,"ls") == 0) {
-            not_parsed = 0;
-            msg = message_new(CHARC_MSG_LIST_FILE);
-            char *dir_name = "/Users/admin/Desktop/charcoal/charcoal";
-            message_set_body(msg, dir_name, strlen(dir_name));
-            message_send(msg, server->fd);
+        
+        char *input = helper_readline("charcoal> ");
+        char *argv[2];
+
+        argv[0] = strtok(input, " ");
+        argv[1] = strtok(NULL, " ");
+        
+        if (strcmp(argv[0],"ls") == 0) {
+            if(argv[1] != NULL){
+                char *dir_name = argv[1];
+                msg = message_new(CHARC_MSG_LIST_FILE);
+                
+                message_set_body(msg, dir_name, strlen(dir_name));
+                message_send(msg, server->fd);
+            } else {
+                fprintf(stdout, "Error: you must specify a directory");
+            }
             
+        } else if(strcmp(argv[0], "cp")){
+            // TODO: implament a copy command
         } else{
             fputs("no such command",stdout);
             not_parsed = 0;
@@ -249,10 +261,7 @@ void client_parse_user_input(server_t *server){
     
 }
 
-char * get_command(char * input){
-    
-    return "";
-}
+
 
 int client_run_loop(server_t *server){
     

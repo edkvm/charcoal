@@ -40,7 +40,7 @@ int main(int argc, char *argv[]){
             exit(0);
         } else {
             charcoal_server_t *charcoal_server = charcoal_server_new();
-//
+            // 
             port = atoi(argv[2]);
             
             // Will block until server exits
