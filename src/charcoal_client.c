@@ -11,59 +11,16 @@
 #include "../include/charcoal_client.h"
 #include "../include/charcoal_logger.h"
 
+// Forward declaration
 typedef struct server_t server_t;
 typedef struct client_t client_t;
+server_t * server_ref_new(char *hostname, int port_num);
+int client_run_loop(server_t *server);
 
+// Client Object
 struct charcoal_client_t{
     server_t *server;
 };
-
-// Server state machine states ebum
-typedef enum {
-    START = 1,
-    HANDSHAKE = 2,
-    READY = 3
-} state_t;
-
-// Server events enum
-typedef enum {
-    connected_event = 1,
-    syn_ack_event = 2,
-    heartbeat_event = 3
-} event_t;
-
-// Client context
-struct client_t{
-    int fd;
-};
-
-// Server context
-struct server_t{
-    int  fd;
-    struct sockaddr_in* address;
-    state_t state;
-    event_t event;
-    int running;
-};
-
-
-
-static char _readline_input[2048];
-
-char* helper_readline(char* prompt){
-    fputs(prompt, stdout);
-    fgets(_readline_input, 2048, stdin);
-    char *cpy = malloc(strlen(_readline_input)+1);
-    strcpy(cpy, _readline_input);
-    cpy[strlen(cpy)-1] = '\0';
-    return cpy;
-}
-
-// Forward declaration
-server_t * server_ref_new(char *hostname, int port_num);
-void client_server_fsm(server_t *server, event_t event);
-int server_connect(server_t *server);
-
 
 // Client API
 charcoal_client_t * charcoal_client_new(){
@@ -83,40 +40,65 @@ void charcoal_client_destroy(charcoal_client_t *self){
 }
 
 int charcoal_client_connect(charcoal_client_t *self, char *hostname, int port){
-
-    message_t *msg;
-    server_t *server = self->server;
     
-    server = server_ref_new(hostname, port);
-    server->state = START;
+    // Get server ctx
+    self->server = server_ref_new(hostname, port);
     
-    if(server_connect(server)){
-        logger_log(LOG_INFO, "[charcoal client] connected to server");
-        
-        client_server_fsm(server, connected_event);
-        
-        msg = message_recv(server->fd);
-        
-        if(message_get_type(msg) == CHARC_MSG_SYN_ACK){
-            client_server_fsm(server, syn_ack_event);
-        }
-    } else {
-        logger_log(LOG_INFO, "[charcoal client] server refused connection");
-        exit(1);
-    }
-
-    while(server->running){
-        char* input = helper_readline("charcoal> ");
-        msg = message_recv(server->fd);
-        if (message_get_type(msg) == CHARC_MSG_HERATBEAT){
-            client_server_fsm(server, heartbeat_event);
-        }
-        
-    }
+    // Run loop
+    client_run_loop(self->server);
     
     return 0;
-
+    
 }
+
+
+// Server state machine states ebum
+typedef enum {
+    START = 1,
+    HANDSHAKE = 2,
+    READY = 3,
+    WORKING = 4
+} state_t;
+
+// Server events enum
+typedef enum {
+    connected_event = 1,
+    syn_ack_event = 2,
+    heartbeat_event = 3,
+    text_message_event = 4,
+    chuncked_message_event = 5
+} event_t;
+
+// Client context
+struct client_t{
+    int fd;
+};
+
+// Server context
+struct server_t{
+    int  fd;
+    struct sockaddr_in* address;
+    state_t state;
+    event_t next_event;
+    event_t event;
+    message_t *reply;
+    int running;
+};
+
+
+// Helper function for reading input
+static char _readline_input[2048];
+
+char* helper_readline(char* prompt){
+    fputs(prompt, stdout);
+    fgets(_readline_input, 2048, stdin);
+    char *cpy = malloc(strlen(_readline_input)+1);
+    strcpy(cpy, _readline_input);
+    cpy[strlen(cpy)-1] = '\0';
+    return cpy;
+}
+
+
 
 
 // 'Private' functions
@@ -155,7 +137,9 @@ server_t * server_ref_new(char *hostname, int port_num){
         
         // Assign port
         server->address->sin_port = htons(port_num);
-        
+
+        // Server state
+        server->state = START;
         logger_log(LOG_DEBUG,"[charcoal client] socket created");
 
         
@@ -180,49 +164,137 @@ int server_connect(server_t *server){
 
 void client_server_fsm(server_t *server, event_t event){
     
-    server->event = event;
+    message_t *msg;
+    server->next_event = event;
 
     logger_log(LOG_DEBUG,"[charcoal server] state %x clinet event %x",
             server->state, server->event);
-    
-    switch(server->state){
-        case START:
-            logger_log(LOG_DEBUG, "[charcoal client] server at START state");
-            if(server->event == connected_event){
-                message_t *msg = message_new(CHARC_MSG_SYN);
-                message_send(msg, server->fd);  
-                server->state = HANDSHAKE;        
-            }
-            
-            break;
-        case HANDSHAKE:
-            logger_log(LOG_DEBUG, "[charcoal client] server at HANDSHAKE state");
-            if(server->event == syn_ack_event){
-                message_t *msg = message_new(CHARC_MSG_ACK);
-                message_send(msg, server->fd);
-                server->running = 0;
-                server->state = READY;   
-            }  
+    while (server->next_event) {
+        server->event = server->next_event;
+        server->next_event = (event_t)0;
+        
+        logger_log(LOG_DEBUG,"[charcoal server] state %d clinet event %d",
+                   server->state, server->event);
 
-            break;
-        case READY:
-            logger_log(LOG_DEBUG, "[charcoal client] server at READY state");
-            if(server->event == heartbeat_event){
-                message_t *msg = message_new(CHARC_MSG_HERATBEAT_ACK);
-                message_send(msg, server->fd);         
-            }
-            break;
+        switch(server->state){
+            case START:
+                if(server->event == connected_event){
+                    msg = message_new(CHARC_MSG_SYN);
+                    message_send(msg, server->fd);  
+                    server->state = HANDSHAKE;        
+                }
+                
+                break;
+            case HANDSHAKE:
+                if(server->event == syn_ack_event){
+                    msg = message_new(CHARC_MSG_ACK);
+                    message_send(msg, server->fd);
+                    server->running = 1;
+                    server->state = READY;   
+                }  
 
+                break;
+            case READY:
+                if(server->event == heartbeat_event){
+                    msg = message_new(CHARC_MSG_HERATBEAT_ACK);
+                    message_send(msg, server->fd);         
+                } else if(server->event == text_message_event){
+                    
+                    if(message_has_more_chunks(server->reply)){
+                        server->next_event = chuncked_message_event;
+                        server->state = WORKING;
+                    }
+                }
+                
+                break;
+            case WORKING:
+                if(server->event == chuncked_message_event){
+                    msg = message_recv(server->fd);
+                    
+                    // Combined chunk into main reply
+                    message_combine_cunk(server->reply, msg);
+                    
+                    if(message_has_more_chunks(server->reply)){
+                        server->next_event = chuncked_message_event;
+                    } else {
+                        server->state = READY;
+                    }
+                }
+
+        }
     }
-
-    server->event = (event_t)-1;
+    
 
 }
 
-void client_parse_user_input(client_t *client, char *input){
+void client_parse_user_input(server_t *server){
+    message_t *msg;
+    int not_parsed = 1;
+    
+    while(not_parsed){
+        char* input = helper_readline("charcoal> ");
+    
+        if (strcmp(input,"ls") == 0) {
+            not_parsed = 0;
+            msg = message_new(CHARC_MSG_LIST_FILE);
+            char *dir_name = "/Users/admin/Desktop/charcoal/charcoal";
+            message_set_body(msg, dir_name, strlen(dir_name));
+            message_send(msg, server->fd);
+            
+        } else{
+            fputs("no such command",stdout);
+            not_parsed = 0;
+        }
+    }
+    
+}
+
+char * get_command(char * input){
+    
+    return "";
+}
+
+int client_run_loop(server_t *server){
+    
+    message_t *msg;
+    
+    if(server_connect(server)){
+
+        client_server_fsm(server, connected_event);
+        
+
+        server->reply = message_recv(server->fd);
+        
+        if(message_get_type(server->reply) == CHARC_MSG_SYN_ACK){
+            client_server_fsm(server, syn_ack_event);
+            if(server->running){
+                logger_log(LOG_INFO, "[charcoal client] connected to server");
+            }
+        }
+        
+    } else {
+        logger_log(LOG_INFO, "[charcoal client] server refused connection");
+        exit(1);
+    }
     
     
+    while(server->running){
+        
+        client_parse_user_input(server);
+        
+        server->reply = message_recv(server->fd);
+        
+        if (message_get_type(server->reply) == CHARC_MSG_HERATBEAT){
+            client_server_fsm(server, heartbeat_event);
+        } else if(message_get_type(server->reply) == CHARC_MSG_TEXT){
+            client_server_fsm(server, text_message_event);
+            char *text = message_get_body(server->reply);
+            fprintf(stdout, "%s\n", text);
+        }
+        
+    }
     
+    return 0;
 }
 
 

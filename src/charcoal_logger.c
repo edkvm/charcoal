@@ -36,22 +36,49 @@ void logger_destroy(logger_t *logger){
 }
 
 // Formats the string, adds time and name 
-char* logger_format(const char* format){
+char* logger_format(int level, const char* format){
     
     // TODO: Add error handling
     
     time_t t = time(NULL);
     struct tm *current_time = gmtime(&t);
-    char c_time_string[20];
+    char c_time_string[19];
     
+    bzero(c_time_string, 19);
     if (current_time != NULL)
     {
-        if (strftime(c_time_string, sizeof(c_time_string), "%F %T ", current_time)) {
+        if (strftime(c_time_string, sizeof(c_time_string), "%F %T", current_time)) {
             
         }
     }
     
-    size_t new_len = strlen(c_time_string) + strlen(format) + 1;
+    char *str_level;
+    
+    switch(level){
+        case LOG_TRACE:
+            str_level = "TARCE";
+            break;
+        case LOG_DEBUG:
+            str_level = "DEBUG";
+            break;
+        case LOG_INFO:
+            str_level = "INFO ";
+            break;
+        case LOG_WARN:
+            str_level = "WARN ";
+            break;
+        case LOG_ERROR:
+            str_level = "ERROR";
+            break;
+        case LOG_FATAL:
+            str_level = "FATAL";
+            break;
+        defualt:
+            str_level = "WARN ";
+            break;
+    }
+    
+    size_t new_len = strlen(c_time_string) + 1 + strlen(str_level) + 1 + strlen(format) + 1 + 1 + 1 + 1;
     
     // string to contain date and content of log
     char* new_format = malloc(sizeof(char) * new_len);
@@ -59,10 +86,13 @@ char* logger_format(const char* format){
     // Clear string
     bzero(new_format, new_len);
     
-    strcpy (new_format,c_time_string);
-    strcat (new_format,format);
-    strcat (new_format,"\n");
+    //strcpy (new_format,c_time_string);
+    //strcat (new_format," ");
+    //strcat (new_format,format);
+    //strcat (new_format,"\n");
     
+    sprintf(new_format, "%s %s %s\n",c_time_string, str_level, format);
+
     return new_format;
 }
 
@@ -70,19 +100,20 @@ char* logger_format(const char* format){
 void logger_log(int level, const char* format, ...) {
     
     va_list argptr;
-    char* new_format = logger_format(format);
+    char* new_format = logger_format(level, format);
     
     // Read variable argument list
     va_start(argptr, format);
     
     // TODO: make log level configurable
-    if(level >= LOG_TRACE){
-        // If Error or above also output to stderr
+    if(level >= LOG_INFO){
         if(level >= LOG_ERROR){
             vfprintf(stderr, new_format, argptr);
+        } else {
+            vfprintf(stdout, new_format, argptr);
+            fflush(stdout);
         }
-        vfprintf(stdout, new_format, argptr);
-        fflush(stdout);
+
     }
     
     va_end(argptr);

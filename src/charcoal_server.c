@@ -2,11 +2,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <dirent.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include "../include/charcoal.h"
 #include "../include/charcoal_msg.h"
 #include "../include/charcoal_server.h"
 #include "../include/charcoal_logger.h"
@@ -18,7 +20,7 @@ typedef struct client_t client_t;
 server_t * server_new(int port_num);
 void server_destroy(server_t* s);
 void server_run_loop(server_t *server);
-
+void client_list_files_in_dir(client_t *client, char* dir_name);
 
 struct charcoal_server_t{
     server_t *server;
@@ -45,9 +47,8 @@ void charcoal_server_destroy(charcoal_server_t *self){
 
 void charcoal_server_bind(charcoal_server_t *self,int port){
     
-    logger_log(LOG_INFO, "charcoal v0.2");
-    
-    
+    fprintf(stdout, "charcoal v%s\n", CHARCOAL_VERSION);
+
     self->server = server_new(port);
     
     
@@ -64,7 +65,9 @@ typedef enum {
     connected_event = 1,
     syn_event = 2,
     ack_event = 3,
-    heartbeat_event = 4
+    heartbeat_event = 4,
+    list_files_event = 5,
+    dispatching_event = 6
 } event_t;
 
 // Context to hold server socket
@@ -79,8 +82,10 @@ struct server_t{
 struct client_t{
     int  fd;
     state_t state;
+    event_t next_event;
     event_t event;
-    int msg_seq;
+    message_t *reply;
+    message_t *request;
     long expires_at;
     int connected;
     
@@ -182,47 +187,106 @@ void server_close(server_t* server){
 
 void server_client_fsm(client_t* client, event_t event){
     
-    client->event = event;
-    logger_log(LOG_DEBUG,"[charcoal server] server state %x clinet event %x",
+    message_t *msg;
+    client->next_event = event;
+    
+    logger_log(LOG_DEBUG,"[charcoal server] state %d event %d",
             client->state, client->event);
     
-    switch(client->state){
-        case START:
-            logger_log(LOG_DEBUG, "[charcoal server] client at START state");
+    
+    while (client->next_event) {
+        client->event = client->next_event;
+        // Clear event
+        client->next_event = (event_t)0;
+        switch(client->state){
+            case START:
+                logger_log(LOG_DEBUG, "[charcoal server] client at START state");
             
-            if(client->event == connected_event){
-                client->connected = 1;
-            } else if(client->event == syn_event){
-                message_t *msg = message_new(CHARC_MSG_SYN_ACK);
-                message_send(msg, client->fd);    
-            } else if(client->event == ack_event) {
-                logger_log(LOG_DEBUG, "[charcoal server] successful handshake ");
-                client->state = READY;
-            } else if(client->event == terminate_event){
-                client->connected=0;  
-            } 
-            break;
-        case READY:
-            logger_log(LOG_DEBUG, "[charcoal server] client at READY state");
-            if(client->event == heartbeat_event) {
+                if(client->event == connected_event){
+                    client->connected = 1;
+                } else if(client->event == syn_event){
+                    // SYN acknowledge message to client and wait for response 
+                    msg = message_new(CHARC_MSG_SYN_ACK);
+                    message_send(msg, client->fd);
+                } else if(client->event == ack_event) {
+                    logger_log(LOG_DEBUG, "[charcoal server] successful handshake ");
+                    client->state = READY;
+                } else if(client->event == terminate_event){
+                    client->connected=0;
+                }
+                break;
+            case READY:
+                logger_log(LOG_DEBUG, "[charcoal server] client at READY state");
+                if(client->event == heartbeat_event) {
                 
-            } else if(client->event == terminate_event){
-                client->state = START;
-                client->connected=0;     
-            } 
-            break;
-        case WORKING:
-            logger_log(LOG_DEBUG, "[charcoal server] client at WORKING state");
-            if(client->event == terminate_event){
-                client->state = START;
-                client->connected=0;  
-            } 
-            break;
+                } else if(client->event == terminate_event){
+                    client->state = START;
+                    client->connected=0;
+                } else if(client->event == list_files_event){
+                    
+                    char *dir_name = message_get_body(client->request);
 
+                    client_list_files_in_dir(client, dir_name);
+                    
+                    client->next_event = dispatching_event;
+                    
+                    client->state = WORKING;
+                }
+                break;
+            case WORKING:
+                logger_log(LOG_DEBUG, "[charcoal server] client at WORKING state");
+                if(client->event == terminate_event){
+                    client->state = START;
+                    client->connected=0;
+                } else if(client->event == dispatching_event){
+                    
+                    message_send(client->reply, client->fd);
+
+                    if(message_has_more_chunks(client->reply)){
+                        client->next_event = dispatching_event;
+                    } else{
+                        client->state=READY;
+                    }
+                }
+                break;
+
+        }
     }
 
-    client->event = (event_t)-1;
+}
 
+void client_list_files_in_dir(client_t *client, char* dir_name){
+    
+    // A pointer to a directory
+    DIR *d;
+    
+    // Represents an entry
+    struct dirent *dir;
+    
+    // Open the dir
+    d = opendir(dir_name);
+    
+    //
+    char *buffer = malloc(sizeof(char) * 1024);
+    int buffer_mul = 1;
+    if(d){
+        // Read dir content
+        while((dir = readdir(d)) != NULL){
+            // Do not record sub directories
+            if((strlen(buffer) + 128) > 1024){
+                    buffer_mul++;
+                    realloc(buffer, sizeof(char) * buffer_mul * 1024);
+            }
+            strcat(buffer, dir->d_name);
+            strcat(buffer, "\n");
+            
+        }
+        
+        // Close dir after reading all file names
+        closedir(d);
+    }
+    
+    client->reply = message_new_text(buffer);
 }
 
 void client_destroy(client_t *client){
@@ -255,10 +319,10 @@ void server_run_loop(server_t *server){
             server_client_fsm(client, connected_event);
         }
         
-        while(client->connected > 0){
+        while(client->connected){
             
-            msg = message_recv(client->fd);
-            int msg_type = message_get_type(msg);
+            client->request = message_recv(client->fd);
+            int msg_type = message_get_type(client->request);
             
             if(msg_type == CHARC_MSG_SYN){
                 server_client_fsm(client, syn_event);
@@ -266,7 +330,10 @@ void server_run_loop(server_t *server){
                 server_client_fsm(client, ack_event);
             } else if(msg_type == CHARC_MSG_UNDEFINED){
                 server_client_fsm(client, terminate_event);
-                break;
+                
+            } else if(msg_type == CHARC_MSG_LIST_FILE){
+                server_client_fsm(client, list_files_event);
+                
             }
             
         }
@@ -278,5 +345,7 @@ void server_run_loop(server_t *server){
     server_close(server);
     
 }
+
+
 
 
