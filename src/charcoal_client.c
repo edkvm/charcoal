@@ -241,6 +241,7 @@ void client_parse_user_input(server_t *server){
         argv[1] = strtok(NULL, " ");
         
         if (strcmp(argv[0],"ls") == 0) {
+            not_parsed = 0;
             if(argv[1] != NULL){
                 char *dir_name = argv[1];
                 msg = message_new(CHARC_MSG_LIST_FILE);
@@ -253,6 +254,7 @@ void client_parse_user_input(server_t *server){
             
         } else if(strcmp(argv[0], "cp")){
             // TODO: implament a copy command
+            not_parsed = 0;
         } else{
             fputs("no such command",stdout);
             not_parsed = 0;
