@@ -163,13 +163,12 @@ int server_connect(server_t *server){
     return result;
 }
 
-void client_server_fsm(server_t *server, event_t event){
+void server_process_events(server_t *server, event_t event){
     
     message_t *msg;
     server->next_event = event;
 
-    logger_log(LOG_DEBUG,"[charcoal server] state %x clinet event %x",
-            server->state, server->event);
+    
     while (server->next_event) {
         server->event = server->next_event;
         server->next_event = (event_t)0;
@@ -201,6 +200,7 @@ void client_server_fsm(server_t *server, event_t event){
                     message_send(msg, server->fd);         
                 } else if(server->event == text_message_event){
                     
+                    // if message has more than one part
                     if(message_has_more_chunks(server->reply)){
                         server->next_event = chuncked_message_event;
                         server->state = WORKING;
@@ -224,11 +224,9 @@ void client_server_fsm(server_t *server, event_t event){
 
         }
     }
-    
-
 }
 
-void client_parse_user_input(server_t *server){
+void parse_user_input(server_t *server){
     message_t *msg;
     int not_parsed = 1;
     
@@ -246,7 +244,7 @@ void client_parse_user_input(server_t *server){
                 char *dir_name = argv[1];
                 msg = message_new(CHARC_MSG_LIST_FILE);
                 
-                message_set_body(msg, dir_name, strlen(dir_name));
+                message_set_body(msg, dir_name, (int)strlen(dir_name));
                 message_send(msg, server->fd);
             } else {
                 fprintf(stdout, "Error: you must specify a directory");
@@ -256,7 +254,7 @@ void client_parse_user_input(server_t *server){
             // TODO: implament a copy command
             not_parsed = 0;
         } else{
-            fputs("no such command",stdout);
+            fputs("no such command\n",stdout);
             not_parsed = 0;
         }
     }
@@ -271,13 +269,13 @@ int client_run_loop(server_t *server){
     
     if(server_connect(server)){
 
-        client_server_fsm(server, connected_event);
+        server_process_events(server, connected_event);
         
 
         server->reply = message_recv(server->fd);
         
         if(message_get_type(server->reply) == CHARC_MSG_SYN_ACK){
-            client_server_fsm(server, syn_ack_event);
+            server_process_events(server, syn_ack_event);
             if(server->running){
                 logger_log(LOG_INFO, "[charcoal client] connected to server");
             }
@@ -291,14 +289,14 @@ int client_run_loop(server_t *server){
     
     while(server->running){
         
-        client_parse_user_input(server);
+        parse_user_input(server);
         
         server->reply = message_recv(server->fd);
         
         if (message_get_type(server->reply) == CHARC_MSG_HERATBEAT){
-            client_server_fsm(server, heartbeat_event);
+            server_process_events(server, heartbeat_event);
         } else if(message_get_type(server->reply) == CHARC_MSG_TEXT){
-            client_server_fsm(server, text_message_event);
+            server_process_events(server, text_message_event);
             char *text = message_get_body(server->reply);
             fprintf(stdout, "%s\n", text);
         }

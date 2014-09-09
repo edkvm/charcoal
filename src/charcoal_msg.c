@@ -36,7 +36,7 @@ message_t * message_new(int type){
 message_t * message_new_text(char *body){
     
     message_t *msg = message_new(CHARC_MSG_TEXT);
-    int msg_size = strlen(body);
+    int msg_size = (int)strlen(body);
     
     // Set the body of the message
     message_set_body(msg, body, msg_size + 1);

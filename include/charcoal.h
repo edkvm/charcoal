@@ -5,7 +5,7 @@
 #include "../include/charcoal_client.h"
 #include "../include/charcoal_server.h"
 
-#define CHARCOAL_VERSION "0.2.5"
+#define CHARCOAL_VERSION "0.2.6"
 
 #define CHARCOAL_MSG_BODY_SIZE 1024
 #define CHARCOAL_MSG_CMD_SIZE 3

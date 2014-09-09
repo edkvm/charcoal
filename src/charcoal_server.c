@@ -14,19 +14,22 @@
 #include "../include/charcoal_logger.h"
 
 
+// Forward declaration
 typedef struct server_t server_t;
 typedef struct client_t client_t;
 
 server_t * server_new(int port_num);
 void server_destroy(server_t* s);
-void server_run_loop(server_t *server);
-void client_list_files_in_dir(client_t *client, char* dir_name);
+void server_run(server_t *server);
+char * list_files_in_dir(char* dir_name);
 
+// Server API
 struct charcoal_server_t{
     server_t *server;
     
 };
 
+// Create new server instance
 charcoal_server_t * charcoal_server_new(){
     charcoal_server_t *self = malloc(sizeof(charcoal_server_t));
     
@@ -35,6 +38,7 @@ charcoal_server_t * charcoal_server_new(){
     return self;
 }
 
+// Destroy server instance
 void charcoal_server_destroy(charcoal_server_t *self){
     
     server_destroy(self->server);
@@ -45,21 +49,21 @@ void charcoal_server_destroy(charcoal_server_t *self){
     
 }
 
+// Bind server to a socket and start it
 void charcoal_server_bind(charcoal_server_t *self,int port){
     
     fprintf(stdout, "charcoal v%s\n", CHARCOAL_VERSION);
 
     self->server = server_new(port);
     
-    
-    server_run_loop(self->server);
-    
+    server_run(self->server);
+
 }
 
-// Client state machine states
+// Client contex state machine states
 typedef enum { START, READY, WORKING } state_t;
 
-// Client events
+// Client ctx events
 typedef enum { 
     terminate_event = -1,
     connected_event = 1,
@@ -168,7 +172,7 @@ client_t* server_accept(server_t* server){
                               &clilen);
     
     if (newsockfd < 0) {
-        logger_log(LOG_ERROR, "Failed accept");
+        logger_log(LOG_ERROR, "Failed accept, %s", strerror(errno));
         client = NULL;
     } else {
         client = malloc(sizeof(client_t));
@@ -185,7 +189,7 @@ void server_close(server_t* server){
     close(server->fd);
 }
 
-void server_client_fsm(client_t* client, event_t event){
+void client_process_event(client_t* client, event_t event){
     
     message_t *msg;
     client->next_event = event;
@@ -226,11 +230,15 @@ void server_client_fsm(client_t* client, event_t event){
                     
                     char *dir_name = message_get_body(client->request);
 
-                    client_list_files_in_dir(client, dir_name);
+                    char *files_list = list_files_in_dir(dir_name);
+                    
+                    client->reply = message_new_text(files_list);
                     
                     client->next_event = dispatching_event;
                     
                     client->state = WORKING;
+                    
+                    free(files_list);
                 }
                 break;
             case WORKING:
@@ -255,7 +263,7 @@ void server_client_fsm(client_t* client, event_t event){
 
 }
 
-void client_list_files_in_dir(client_t *client, char* dir_name){
+char * list_files_in_dir(char* dir_name){
     
     // A pointer to a directory
     DIR *d;
@@ -286,9 +294,11 @@ void client_list_files_in_dir(client_t *client, char* dir_name){
         closedir(d);
     }
     
-    client->reply = message_new_text(buffer);
+    return buffer;
+    
 }
 
+// Closes client socket and releases memory
 void client_destroy(client_t *client){
     
     logger_log(LOG_INFO, "[charcoal server] cleaning client");
@@ -300,10 +310,10 @@ void client_destroy(client_t *client){
 }   
 
 
-void server_run_loop(server_t *server){
+void server_run(server_t *server){
     
-    message_t *msg;
     client_t *client;
+    
     
     if(server_open(server)){
         server->running = 1;
@@ -311,12 +321,14 @@ void server_run_loop(server_t *server){
         server->running = 0;
     }
     
+    // TODO: Add graceful shut down
+    
     while(server->running){
         
         client = server_accept(server);
         
         if(client!= NULL){
-            server_client_fsm(client, connected_event);
+            client_process_event(client, connected_event);
         }
         
         while(client->connected){
@@ -325,15 +337,18 @@ void server_run_loop(server_t *server){
             int msg_type = message_get_type(client->request);
             
             if(msg_type == CHARC_MSG_SYN){
-                server_client_fsm(client, syn_event);
+                client_process_event(client, syn_event);
             } else if (msg_type == CHARC_MSG_ACK){
-                server_client_fsm(client, ack_event);
+                client_process_event(client, ack_event);
             } else if(msg_type == CHARC_MSG_UNDEFINED){
-                server_client_fsm(client, terminate_event);
-                
+                client_process_event(client, terminate_event);
             } else if(msg_type == CHARC_MSG_LIST_FILE){
-                server_client_fsm(client, list_files_event);
+                client_process_event(client, list_files_event);
                 
+            }
+            
+            if(client->request != NULL){
+                free(client->request);
             }
             
         }
