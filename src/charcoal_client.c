@@ -15,15 +15,19 @@
 // Forward declaration
 typedef struct server_t server_t;
 typedef struct client_t client_t;
-server_t * server_ref_new(char *hostname, int port_num);
-int client_run_loop(server_t *server);
+server_t * server_ctx_new(char *hostname, int port_num);
+int client_run(charcoal_client_t *self);
 
 // Client Object
 struct charcoal_client_t{
     server_t *server;
+    int running;
+    
 };
 
-// Client API
+// ------ Client API ---------
+
+// Creates new client
 charcoal_client_t * charcoal_client_new(){
     
     charcoal_client_t *self = malloc(sizeof(charcoal_client_t));
@@ -33,6 +37,7 @@ charcoal_client_t * charcoal_client_new(){
     return self;
 }
 
+// Releases memory
 void charcoal_client_destroy(charcoal_client_t *self){
     
     if(self->server != NULL){
@@ -40,20 +45,21 @@ void charcoal_client_destroy(charcoal_client_t *self){
     }
 }
 
+// Connectes the client
 int charcoal_client_connect(charcoal_client_t *self, char *hostname, int port){
     
     // Get server ctx
-    self->server = server_ref_new(hostname, port);
+    self->server = server_ctx_new(hostname, port);
     
     // Run loop
-    client_run_loop(self->server);
+    client_run(self);
     
     return 0;
     
 }
 
 
-// Server state machine states ebum
+// Server ctx states
 typedef enum {
     START = 1,
     HANDSHAKE = 2,
@@ -61,7 +67,7 @@ typedef enum {
     WORKING = 4
 } state_t;
 
-// Server events enum
+// Server events
 typedef enum {
     connected_event = 1,
     syn_ack_event = 2,
@@ -69,11 +75,6 @@ typedef enum {
     text_message_event = 4,
     chuncked_message_event = 5
 } event_t;
-
-// Client context
-struct client_t{
-    int fd;
-};
 
 // Server context
 struct server_t{
@@ -83,7 +84,7 @@ struct server_t{
     event_t next_event;
     event_t event;
     message_t *reply;
-    int running;
+    int connected;
 };
 
 
@@ -102,8 +103,8 @@ char* helper_readline(char* prompt){
 
 
 
-// 'Private' functions
-server_t * server_ref_new(char *hostname, int port_num){
+// Creates new Server context with server port and host
+server_t * server_ctx_new(char *hostname, int port_num){
     
     server_t* server = malloc(sizeof(server_t));
     struct hostent *host;
@@ -163,6 +164,7 @@ int server_connect(server_t *server){
     return result;
 }
 
+// Process events that occur on the server ctx
 void server_process_events(server_t *server, event_t event){
     
     message_t *msg;
@@ -180,7 +182,7 @@ void server_process_events(server_t *server, event_t event){
             case START:
                 if(server->event == connected_event){
                     msg = message_new(CHARC_MSG_SYN);
-                    message_send(msg, server->fd);  
+                    message_send(msg, server->fd);
                     server->state = HANDSHAKE;        
                 }
                 
@@ -189,8 +191,7 @@ void server_process_events(server_t *server, event_t event){
                 if(server->event == syn_ack_event){
                     msg = message_new(CHARC_MSG_ACK);
                     message_send(msg, server->fd);
-                    server->running = 1;
-                    server->state = READY;   
+                    server->state = READY;
                 }  
 
                 break;
@@ -215,6 +216,7 @@ void server_process_events(server_t *server, event_t event){
                     // Combined chunk into main reply
                     message_combine_cunk(server->reply, msg);
                     
+                    // if message has more than one part
                     if(message_has_more_chunks(server->reply)){
                         server->next_event = chuncked_message_event;
                     } else {
@@ -226,6 +228,7 @@ void server_process_events(server_t *server, event_t event){
     }
 }
 
+// Prase input from the client
 void parse_user_input(server_t *server){
     message_t *msg;
     int not_parsed = 1;
@@ -262,24 +265,19 @@ void parse_user_input(server_t *server){
 }
 
 
-
-int client_run_loop(server_t *server){
+// Client execution
+int client_run(charcoal_client_t *self){
     
-    message_t *msg;
+    server_t *server = self->server;
     
+    // Try connect to server
     if(server_connect(server)){
-
+    
+        // if connected, process connected event
         server_process_events(server, connected_event);
         
-
-        server->reply = message_recv(server->fd);
-        
-        if(message_get_type(server->reply) == CHARC_MSG_SYN_ACK){
-            server_process_events(server, syn_ack_event);
-            if(server->running){
-                logger_log(LOG_INFO, "[charcoal client] connected to server");
-            }
-        }
+        // Client should run
+        self->running = 1;
         
     } else {
         logger_log(LOG_INFO, "[charcoal client] server refused connection");
@@ -287,9 +285,7 @@ int client_run_loop(server_t *server){
     }
     
     
-    while(server->running){
-        
-        parse_user_input(server);
+    while(self->running){
         
         server->reply = message_recv(server->fd);
         
@@ -299,7 +295,14 @@ int client_run_loop(server_t *server){
             server_process_events(server, text_message_event);
             char *text = message_get_body(server->reply);
             fprintf(stdout, "%s\n", text);
+        } else if(message_get_type(server->reply) == CHARC_MSG_SYN_ACK){
+            server_process_events(server, syn_ack_event);
+            if(self->running){
+                logger_log(LOG_INFO, "[charcoal client] connected to server");
+            }
         }
+        
+        parse_user_input(server);
         
     }
     
