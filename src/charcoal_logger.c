@@ -106,7 +106,7 @@ void logger_log(int level, const char* format, ...) {
     va_start(argptr, format);
     
     // TODO: make log level configurable
-    if(level >= LOG_INFO){
+    if(level >= LOG_TRACE){
         if(level >= LOG_ERROR){
             vfprintf(stderr, new_format, argptr);
         } else {

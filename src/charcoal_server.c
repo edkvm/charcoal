@@ -238,7 +238,7 @@ void client_process_event(client_t* client, event_t event){
                     
                     client->state = WORKING;
                     
-                    free(files_list);
+                    //free(files_list);
                 }
                 break;
             case WORKING:
@@ -283,7 +283,7 @@ char * list_files_in_dir(char* dir_name){
             // Do not record sub directories
             if((strlen(buffer) + 128) > 1024){
                     buffer_mul++;
-                    realloc(buffer, sizeof(char) * buffer_mul * 1024);
+                    buffer = (char *)realloc(buffer, sizeof(char) * buffer_mul * 1024);
             }
             strcat(buffer, dir->d_name);
             strcat(buffer, "\n");
@@ -347,10 +347,7 @@ void server_run(server_t *server){
                 
             }
             
-            if(client->request != NULL){
-                free(client->request);
-            }
-            
+                       
         }
         
         // Clean client context
